@@ -97,10 +97,6 @@
 </style>
 </head>
 <body>
-  <header>
-    <h1>Maya 🌺</h1>
-    <p>Your sweet personal nutritionist — click the button &amp; talk to me!</p>
-  </header>
   <div class="avatar" id="avatar"></div>
   <div id="status">Click the button to talk</div>
   <select id="micSelect" title="Choose your microphone"></select>
@@ -246,6 +242,7 @@ async function sendAudio() {
     const data = await resp.json();
     if (data.error) throw new Error(data.error);
     if (data.userText) addMsg(data.userText, "user");
+    if (data.order && data.order.ok) renderOrder(data.order);
     if (data.reply) {
       addMsg(data.reply, "maya");
       if (data.audio) {
@@ -299,6 +296,34 @@ krogerConnect.addEventListener("click", () => {
   window.open("/kroger/login", "_blank");
 });
 
+function renderOrder(data) {
+  orderResult.innerHTML = "";
+  const card = document.createElement("div");
+  card.className = "order-card";
+  card.innerHTML = `<h3>✅ Added to your QFC cart!</h3>
+    <div class="store">📍 Pickup at ${data.store.name} — ${data.store.address}</div>`;
+  const ul = document.createElement("ul");
+  data.added.forEach(f => {
+    const li = document.createElement("li");
+    li.textContent = "🥗 " + f.description;
+    ul.appendChild(li);
+  });
+  card.appendChild(ul);
+  if (data.missing.length) {
+    const m = document.createElement("div");
+    m.className = "missing";
+    m.textContent = "Not found at this store: " + data.missing.join(", ");
+    card.appendChild(m);
+  }
+  const a = document.createElement("a");
+  a.className = "checkout";
+  a.href = data.checkoutUrl;
+  a.target = "_blank";
+  a.textContent = "Open QFC cart → choose Pickup time & pay";
+  card.appendChild(a);
+  orderResult.appendChild(card);
+}
+
 krogerOrder.addEventListener("click", async () => {
   krogerOrder.disabled = true;
   krogerOrder.textContent = "🛒 Building your QFC order…";
@@ -307,32 +332,7 @@ krogerOrder.addEventListener("click", async () => {
     const data = await resp.json();
     if (data.needLogin) throw new Error("Connect your Kroger account first (blue button).");
     if (data.error) throw new Error(data.error);
-
-    orderResult.innerHTML = "";
-    const card = document.createElement("div");
-    card.className = "order-card";
-    card.innerHTML = `<h3>✅ Added to your QFC cart!</h3>
-      <div class="store">📍 Pickup at ${data.store.name} — ${data.store.address}</div>`;
-    const ul = document.createElement("ul");
-    data.added.forEach(f => {
-      const li = document.createElement("li");
-      li.textContent = "🥗 " + f.description;
-      ul.appendChild(li);
-    });
-    card.appendChild(ul);
-    if (data.missing.length) {
-      const m = document.createElement("div");
-      m.className = "missing";
-      m.textContent = "Not found at this store: " + data.missing.join(", ");
-      card.appendChild(m);
-    }
-    const a = document.createElement("a");
-    a.className = "checkout";
-    a.href = data.checkoutUrl;
-    a.target = "_blank";
-    a.textContent = "Open QFC cart → choose Pickup time & pay";
-    card.appendChild(a);
-    orderResult.appendChild(card);
+    renderOrder(data);
   } catch (err) {
     addMsg(err.message, "error");
   } finally {
