@@ -242,7 +242,7 @@ async function sendAudio() {
     const data = await resp.json();
     if (data.error) throw new Error(data.error);
     if (data.userText) addMsg(data.userText, "user");
-    if (data.order && data.order.ok) renderOrder(data.order);
+    if (data.preview && data.preview.ok) renderPreview(data.preview);
     if (data.reply) {
       addMsg(data.reply, "maya");
       if (data.audio) {
@@ -292,20 +292,59 @@ const krogerConnect = document.getElementById("krogerConnect");
 const krogerOrder = document.getElementById("krogerOrder");
 const orderResult = document.getElementById("orderResult");
 
+function refreshKrogerStatus() {
+  fetch("/api/kroger/status").then(r => r.json()).then(s => {
+    if (s.connected) {
+      krogerConnect.textContent = "✅ QFC connected";
+      krogerConnect.style.background = "#4a9e50";
+      krogerConnect.disabled = true;
+    } else if (!s.configured) {
+      krogerConnect.textContent = "🔗 Connect QFC (needs setup)";
+    }
+    return s.connected;
+  });
+}
+
 krogerConnect.addEventListener("click", () => {
   window.open("/kroger/login", "_blank");
+  // poll until the user finishes logging in, then flip the button
+  const poll = setInterval(async () => {
+    const s = await (await fetch("/api/kroger/status")).json();
+    if (s.connected) { clearInterval(poll); refreshKrogerStatus(); }
+  }, 3000);
+  setTimeout(() => clearInterval(poll), 180000);
 });
 
-function renderOrder(data) {
+function renderPreview(data) {
   orderResult.innerHTML = "";
   const card = document.createElement("div");
   card.className = "order-card";
-  card.innerHTML = `<h3>✅ Added to your QFC cart!</h3>
-    <div class="store">📍 Pickup at ${data.store.name} — ${data.store.address}</div>`;
+  card.innerHTML = `<h3>🛒 Review your QFC list</h3>
+    <div class="store">📍 Pickup at ${data.store.name} — ${data.store.address}<br>Uncheck anything you don't want, then add to cart.</div>`;
   const ul = document.createElement("ul");
-  data.added.forEach(f => {
+  data.items.forEach(f => {
     const li = document.createElement("li");
-    li.textContent = "🥗 " + f.description;
+    const label = document.createElement("label");
+    label.style.display = "flex";
+    label.style.alignItems = "center";
+    label.style.gap = "10px";
+    label.style.cursor = "pointer";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    cb.value = f.upc;
+    cb.style.width = "18px";
+    cb.style.height = "18px";
+    cb.style.accentColor = "#4a9e50";
+    const span = document.createElement("span");
+    span.textContent = f.description;
+    cb.addEventListener("change", () => {
+      span.style.textDecoration = cb.checked ? "none" : "line-through";
+      span.style.color = cb.checked ? "#444" : "#bbb";
+    });
+    label.appendChild(cb);
+    label.appendChild(span);
+    li.appendChild(label);
     ul.appendChild(li);
   });
   card.appendChild(ul);
@@ -315,24 +354,52 @@ function renderOrder(data) {
     m.textContent = "Not found at this store: " + data.missing.join(", ");
     card.appendChild(m);
   }
-  const a = document.createElement("a");
-  a.className = "checkout";
-  a.href = data.checkoutUrl;
-  a.target = "_blank";
-  a.textContent = "Open QFC cart → choose Pickup time & pay";
-  card.appendChild(a);
+  const confirmBtn = document.createElement("button");
+  confirmBtn.className = "checkout";
+  confirmBtn.style.border = "none";
+  confirmBtn.style.width = "100%";
+  confirmBtn.style.cursor = "pointer";
+  confirmBtn.style.fontSize = "1rem";
+  confirmBtn.textContent = "✅ Add checked items to my QFC cart";
+  confirmBtn.addEventListener("click", async () => {
+    const upcs = [...card.querySelectorAll("input:checked")].map(cb => cb.value);
+    if (!upcs.length) { addMsg("Nothing selected!", "error"); return; }
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Adding to cart…";
+    try {
+      const resp = await fetch("/api/kroger/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ upcs }),
+      });
+      const result = await resp.json();
+      if (result.error) throw new Error(result.error);
+      confirmBtn.remove();
+      const done = document.createElement("a");
+      done.className = "checkout";
+      done.href = result.checkoutUrl;
+      done.target = "_blank";
+      done.textContent = `✅ ${upcs.length} items added! Open QFC cart → choose Pickup time & pay`;
+      card.appendChild(done);
+    } catch (err) {
+      addMsg(err.message, "error");
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "✅ Add checked items to my QFC cart";
+    }
+  });
+  card.appendChild(confirmBtn);
   orderResult.appendChild(card);
 }
 
 krogerOrder.addEventListener("click", async () => {
   krogerOrder.disabled = true;
-  krogerOrder.textContent = "🛒 Building your QFC order…";
+  krogerOrder.textContent = "🛒 Building your QFC list…";
   try {
     const resp = await fetch("/api/kroger/order", { method: "POST" });
     const data = await resp.json();
     if (data.needLogin) throw new Error("Connect your Kroger account first (blue button).");
     if (data.error) throw new Error(data.error);
-    renderOrder(data);
+    renderPreview(data);
   } catch (err) {
     addMsg(err.message, "error");
   } finally {
@@ -342,10 +409,7 @@ krogerOrder.addEventListener("click", async () => {
 });
 
 // hide connect button if already connected
-fetch("/api/kroger/status").then(r => r.json()).then(s => {
-  if (s.connected) krogerConnect.textContent = "✅ Kroger connected";
-  if (!s.configured) krogerConnect.textContent = "🔗 Connect QFC (needs setup)";
-});
+refreshKrogerStatus();
 </script>
 </body>
 </html>

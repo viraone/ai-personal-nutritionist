@@ -51,17 +51,16 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
     const cartPhrase = /(put|add|throw|stick)\s+(that|those|them|these|it|everything|all of (that|it))\s+(in|into|to)\s+(my|the)\s+cart|sounds good.*cart/i;
     if (cartPhrase.test(userText)) {
       history.push({ role: "user", content: userText });
-      let reply, order = null;
+      let reply, preview = null;
       try {
-        order = await buildQfcOrder();
-        const names = order.added.map(f => f.description).slice(0, 5);
-        reply = `Done, sweetie! I added ${order.added.length} items to your QFC cart — ${names.join(", ")}${order.added.length > 5 ? ", and more" : ""}. ` +
-          (order.missing.length ? `I couldn't find ${order.missing.join(" or ")} at this store. ` : "") +
-          `It's all set for pickup at ${order.store.name}. Just open your cart to choose a time and pay!`;
+        preview = await previewQfcOrder();
+        reply = `You got it! I found ${preview.items.length} items at ${preview.store.name}. ` +
+          (preview.missing.length ? `I couldn't find ${preview.missing.join(" or ")} there. ` : "") +
+          `Take a peek at the list — uncheck anything you don't want, then tap Add to cart!`;
       } catch (err) {
         reply = err.needLogin
           ? "I'd love to, but your Kroger account isn't connected yet — click the blue Connect QFC button first!"
-          : `Hmm, I hit a snag adding that to your cart: ${err.message}`;
+          : `Hmm, I hit a snag building your list: ${err.message}`;
       }
       history.push({ role: "assistant", content: reply });
       const ttsResp2 = await fetch("https://api.openai.com/v1/audio/speech", {
@@ -70,7 +69,7 @@ app.post("/api/voice", upload.single("audio"), async (req, res) => {
         body: JSON.stringify({ model: "tts-1", voice: "nova", input: reply, speed: 1.0 }),
       });
       const audioBuf2 = ttsResp2.ok ? Buffer.from(await ttsResp2.arrayBuffer()) : null;
-      return res.json({ userText, reply, audio: audioBuf2 ? audioBuf2.toString("base64") : null, order });
+      return res.json({ userText, reply, audio: audioBuf2 ? audioBuf2.toString("base64") : null, preview });
     }
 
     // 2) Chat completion
@@ -202,8 +201,8 @@ async function nearestQFC() {
   return qfcLocation;
 }
 
-// Build shopping list from Maya's conversation, find products at QFC, add to cart
-async function buildQfcOrder() {
+// Extract Maya's suggestions and match products at QFC — no cart changes yet
+async function previewQfcOrder() {
   const token = await userToken();
   if (!token) { const e = new Error("Not connected to Kroger yet."); e.needLogin = true; throw e; }
   if (!history.length) throw new Error("Talk to Maya first so she can suggest foods!");
@@ -246,27 +245,43 @@ async function buildQfcOrder() {
   }
   if (!found.length) throw new Error("No products found at QFC for the list.");
 
-  // 3) Add to the user's Kroger cart for pickup
-  const cartResp = await fetch(`${KROGER_API}/cart/add`, {
-    method: "PUT",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ items: found.map(f => ({ upc: f.upc, quantity: 1, modality: "PICKUP" })) }),
-  });
-  if (!cartResp.ok && cartResp.status !== 204) throw new Error(`Cart add failed: ${await cartResp.text()}`);
-
   return {
     ok: true,
     store: { name: loc.name, address: `${loc.address.addressLine1}, ${loc.address.city} ${loc.address.zipCode}` },
-    added: found,
+    items: found,
     missing,
-    checkoutUrl: "https://www.qfc.com/cart",
   };
+}
+
+// Add the confirmed items to the user's Kroger cart for pickup
+async function addToQfcCart(upcs) {
+  const token = await userToken();
+  if (!token) { const e = new Error("Not connected to Kroger yet."); e.needLogin = true; throw e; }
+  if (!upcs?.length) throw new Error("No items selected.");
+  const cartResp = await fetch(`${KROGER_API}/cart/add`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ items: upcs.map(upc => ({ upc, quantity: 1, modality: "PICKUP" })) }),
+  });
+  if (!cartResp.ok && cartResp.status !== 204) throw new Error(`Cart add failed: ${await cartResp.text()}`);
+  return { ok: true, checkoutUrl: "https://www.qfc.com/cart" };
 }
 
 app.post("/api/kroger/order", async (_req, res) => {
   try {
-    const order = await buildQfcOrder();
-    res.json(order);
+    const preview = await previewQfcOrder();
+    res.json(preview);
+  } catch (err) {
+    console.error(err);
+    if (err.needLogin) return res.status(401).json({ error: err.message, needLogin: true });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/kroger/confirm", async (req, res) => {
+  try {
+    const result = await addToQfcCart(req.body.upcs);
+    res.json(result);
   } catch (err) {
     console.error(err);
     if (err.needLogin) return res.status(401).json({ error: err.message, needLogin: true });
