@@ -80,6 +80,37 @@
   #keyBar #keyClear { background: #ccc; }
   #keyBar.saved input { display: none; }
   #keyBar.saved #keySave { display: none; }
+  #shopBtn {
+    margin-top: 12px; padding: 10px 22px; border-radius: 24px; border: none;
+    background: linear-gradient(135deg, #7bc47f, #4a9e50); color: white;
+    font-weight: 700; font-size: 0.95rem; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(74, 158, 80, 0.35);
+  }
+  #shopBtn:hover { transform: translateY(-1px); }
+  #shopBtn:disabled { opacity: 0.6; cursor: wait; }
+  #shopList {
+    width: 100%; max-width: 640px; margin-top: 14px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  #shopList .shop-card {
+    background: white; border-radius: 16px; padding: 16px 20px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+  }
+  #shopList h3 { color: #4a9e50; font-size: 1rem; margin-bottom: 4px; }
+  #shopList .pickup-note { font-size: 0.82rem; color: #888; margin-bottom: 10px; }
+  #shopList ul { list-style: none; }
+  #shopList li { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid #f2f2f2; }
+  #shopList li:last-child { border-bottom: none; }
+  #shopList .item-name { color: #444; }
+  #shopList .item-why { display: block; font-size: 0.75rem; color: #aaa; }
+  #shopList a.addLink {
+    background: #ffd814; color: #333; text-decoration: none; font-size: 0.8rem;
+    font-weight: 700; padding: 6px 14px; border-radius: 16px; white-space: nowrap;
+  }
+  #shopList .openAll {
+    margin-top: 10px; width: 100%; padding: 10px; border: none; border-radius: 12px;
+    background: #ffd814; font-weight: 700; cursor: pointer; font-size: 0.9rem;
+  }
 </style>
 </head>
 <body>
@@ -93,6 +124,8 @@
   <div id="meterWrap"><div id="meterBar"></div></div>
   <button id="talkBtn">🎙️ Click to Talk</button>
   <button id="resetBtn">Start fresh conversation</button>
+  <button id="shopBtn">🛒 Turn Maya's tips into a Whole Foods pickup list</button>
+  <div id="shopList"></div>
   <div id="keyBar">
     <input type="password" id="keyInput" placeholder="Paste your OpenAI API key (sk-...)" />
     <button id="keySave">Save</button>
@@ -334,6 +367,81 @@ micSelect.addEventListener("change", () => {
 });
 
 listMics();
+
+// 🛒 Whole Foods pickup list — extracts groceries from Maya's suggestions
+const shopBtn = document.getElementById("shopBtn");
+const shopList = document.getElementById("shopList");
+const WF_STORE = "Whole Foods Market, 2210 Westlake Ave, Seattle, WA 98121";
+
+function amazonLink(item) {
+  return "https://www.amazon.com/s?k=" + encodeURIComponent(item) + "&i=wholefoods";
+}
+
+shopBtn.addEventListener("click", async () => {
+  const key = localStorage.getItem("openai_key");
+  if (!key) { addMsg("Please paste your OpenAI API key below first 🔑", "error"); return; }
+  if (!history.length) { addMsg("Talk to Maya first so she can suggest some foods! 🎙️", "error"); return; }
+  shopBtn.disabled = true;
+  shopBtn.textContent = "🛒 Building your list…";
+  try {
+    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "Extract a grocery shopping list from this nutrition conversation. Return ONLY JSON: {\"items\":[{\"name\":\"grocery item as you'd search it at Whole Foods\",\"why\":\"3-6 word reason\"}]}. Include 4-10 concrete items Maya recommended or that support her advice. No pantry staples the user didn't discuss." },
+          { role: "user", content: history.map(m => m.role + ": " + m.content).join("\n") },
+        ],
+        response_format: { type: "json_object" },
+        max_tokens: 400,
+      }),
+    });
+    if (!resp.ok) throw new Error("Couldn't build the list — check your API key.");
+    const data = await resp.json();
+    const items = JSON.parse(data.choices[0].message.content).items || [];
+    if (!items.length) throw new Error("No food suggestions found yet — chat with Maya a bit more!");
+
+    shopList.innerHTML = "";
+    const card = document.createElement("div");
+    card.className = "shop-card";
+    card.innerHTML = "<h3>🛒 Your Whole Foods Pickup List</h3>" +
+      "<div class='pickup-note'>At checkout choose <b>Pickup</b> → <b>" + WF_STORE + "</b></div>";
+    const ul = document.createElement("ul");
+    items.forEach(it => {
+      const li = document.createElement("li");
+      const span = document.createElement("span");
+      span.className = "item-name";
+      span.textContent = it.name;
+      const why = document.createElement("span");
+      why.className = "item-why";
+      why.textContent = it.why || "";
+      span.appendChild(why);
+      const a = document.createElement("a");
+      a.className = "addLink";
+      a.href = amazonLink(it.name);
+      a.target = "_blank";
+      a.textContent = "Find on Amazon";
+      li.appendChild(span);
+      li.appendChild(a);
+      ul.appendChild(li);
+    });
+    card.appendChild(ul);
+    const openAll = document.createElement("button");
+    openAll.className = "openAll";
+    openAll.textContent = "Open all items on Amazon Whole Foods →";
+    openAll.addEventListener("click", () => {
+      items.forEach((it, i) => setTimeout(() => window.open(amazonLink(it.name), "_blank"), i * 350));
+    });
+    card.appendChild(openAll);
+    shopList.appendChild(card);
+  } catch (err) {
+    addMsg(err.message, "error");
+  } finally {
+    shopBtn.disabled = false;
+    shopBtn.textContent = "🛒 Turn Maya's tips into a Whole Foods pickup list";
+  }
+});
 </script>
 </body>
 </html>

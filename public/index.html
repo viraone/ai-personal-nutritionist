@@ -68,6 +68,32 @@
     background: linear-gradient(90deg, #7bc47f, #ff9a56);
     transition: width 0.08s linear;
   }
+  #krogerBar { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  #krogerBar button {
+    padding: 10px 20px; border-radius: 24px; border: none; cursor: pointer;
+    font-weight: 700; font-size: 0.92rem; color: white;
+  }
+  #krogerConnect { background: linear-gradient(135deg, #1e5bb8, #3b82d6); }
+  #krogerOrder { background: linear-gradient(135deg, #7bc47f, #4a9e50); }
+  #krogerBar button:disabled { opacity: 0.6; cursor: wait; }
+  #orderResult {
+    width: 100%; max-width: 640px; margin-top: 14px;
+  }
+  #orderResult .order-card {
+    background: white; border-radius: 16px; padding: 16px 20px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+  }
+  #orderResult h3 { color: #4a9e50; font-size: 1rem; margin-bottom: 6px; }
+  #orderResult .store { font-size: 0.85rem; color: #888; margin-bottom: 10px; }
+  #orderResult ul { list-style: none; }
+  #orderResult li { padding: 5px 0; border-bottom: 1px solid #f2f2f2; color: #444; font-size: 0.92rem; }
+  #orderResult li:last-child { border-bottom: none; }
+  #orderResult .missing { color: #b26a00; font-size: 0.8rem; margin-top: 8px; }
+  #orderResult a.checkout {
+    display: block; text-align: center; margin-top: 12px; padding: 12px;
+    background: #ffd814; color: #333; border-radius: 12px; font-weight: 700;
+    text-decoration: none;
+  }
 </style>
 </head>
 <body>
@@ -81,6 +107,11 @@
   <div id="meterWrap"><div id="meterBar"></div></div>
   <button id="talkBtn">🎙️ Click to Talk</button>
   <button id="resetBtn">Start fresh conversation</button>
+  <div id="krogerBar">
+    <button id="krogerConnect">🔗 Connect QFC / Kroger</button>
+    <button id="krogerOrder">🛒 Add Maya's list to my QFC cart</button>
+  </div>
+  <div id="orderResult"></div>
   <div id="chat"></div>
 
 <script>
@@ -258,6 +289,63 @@ micSelect.addEventListener("change", () => {
 });
 
 listMics();
+
+// ── QFC / Kroger cart integration ──
+const krogerConnect = document.getElementById("krogerConnect");
+const krogerOrder = document.getElementById("krogerOrder");
+const orderResult = document.getElementById("orderResult");
+
+krogerConnect.addEventListener("click", () => {
+  window.open("/kroger/login", "_blank");
+});
+
+krogerOrder.addEventListener("click", async () => {
+  krogerOrder.disabled = true;
+  krogerOrder.textContent = "🛒 Building your QFC order…";
+  try {
+    const resp = await fetch("/api/kroger/order", { method: "POST" });
+    const data = await resp.json();
+    if (data.needLogin) throw new Error("Connect your Kroger account first (blue button).");
+    if (data.error) throw new Error(data.error);
+
+    orderResult.innerHTML = "";
+    const card = document.createElement("div");
+    card.className = "order-card";
+    card.innerHTML = `<h3>✅ Added to your QFC cart!</h3>
+      <div class="store">📍 Pickup at ${data.store.name} — ${data.store.address}</div>`;
+    const ul = document.createElement("ul");
+    data.added.forEach(f => {
+      const li = document.createElement("li");
+      li.textContent = "🥗 " + f.description;
+      ul.appendChild(li);
+    });
+    card.appendChild(ul);
+    if (data.missing.length) {
+      const m = document.createElement("div");
+      m.className = "missing";
+      m.textContent = "Not found at this store: " + data.missing.join(", ");
+      card.appendChild(m);
+    }
+    const a = document.createElement("a");
+    a.className = "checkout";
+    a.href = data.checkoutUrl;
+    a.target = "_blank";
+    a.textContent = "Open QFC cart → choose Pickup time & pay";
+    card.appendChild(a);
+    orderResult.appendChild(card);
+  } catch (err) {
+    addMsg(err.message, "error");
+  } finally {
+    krogerOrder.disabled = false;
+    krogerOrder.textContent = "🛒 Add Maya's list to my QFC cart";
+  }
+});
+
+// hide connect button if already connected
+fetch("/api/kroger/status").then(r => r.json()).then(s => {
+  if (s.connected) krogerConnect.textContent = "✅ Kroger connected";
+  if (!s.configured) krogerConnect.textContent = "🔗 Connect QFC (needs setup)";
+});
 </script>
 </body>
 </html>
