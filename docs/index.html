@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Maya — Your Personal AI Nutritionist</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    background: linear-gradient(160deg, #fff5eb 0%, #ffe8f0 40%, #e8fff0 100%);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 24px;
+  }
+  header { text-align: center; margin-bottom: 12px; }
+  header h1 { font-size: 2rem; color: #e05780; }
+  header p { color: #7a8b7f; margin-top: 4px; font-size: 1.05rem; }
+  .avatar {
+    width: 240px; height: 300px; border-radius: 24px;
+    background: url("maya.png") center 20%/cover no-repeat;
+    border: 4px solid white;
+    margin: 14px auto;
+    box-shadow: 0 8px 30px rgba(224, 87, 128, 0.35);
+    transition: transform 0.3s ease;
+  }
+  .avatar.speaking { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 8px 30px rgba(224,87,128,.3); }
+    50% { transform: scale(1.07); box-shadow: 0 8px 45px rgba(224,87,128,.55); }
+  }
+  #status { color: #a06080; min-height: 24px; font-style: italic; margin-bottom: 10px; }
+  #talkBtn {
+    border: none; border-radius: 50px; padding: 18px 46px;
+    font-size: 1.3rem; font-weight: 700; color: white; cursor: pointer;
+    background: linear-gradient(135deg, #e05780, #ff9a56);
+    box-shadow: 0 6px 20px rgba(224, 87, 128, 0.4);
+    transition: all 0.2s ease;
+  }
+  #talkBtn:hover { transform: translateY(-2px); }
+  #talkBtn.recording { background: linear-gradient(135deg, #d32f2f, #ff6659); animation: recPulse 1s infinite; }
+  @keyframes recPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(211,47,47,.5);} 50% { box-shadow: 0 0 0 14px rgba(211,47,47,0);} }
+  #talkBtn:disabled { opacity: 0.6; cursor: wait; }
+  #resetBtn {
+    margin-top: 10px; background: none; border: 1px solid #ccc; border-radius: 20px;
+    padding: 6px 16px; color: #888; cursor: pointer; font-size: 0.85rem;
+  }
+  #chat {
+    width: 100%; max-width: 640px; margin-top: 22px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg { padding: 12px 18px; border-radius: 18px; max-width: 85%; line-height: 1.45; }
+  .user { align-self: flex-end; background: #e05780; color: white; border-bottom-right-radius: 4px; }
+  .maya { align-self: flex-start; background: white; color: #444; border-bottom-left-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .maya::before { content: "Maya 🌺"; display: block; font-size: 0.75rem; font-weight: 700; color: #7bc47f; margin-bottom: 4px; }
+  .error { align-self: center; color: #c62828; background: #ffebee; font-size: 0.9rem; }
+  #micSelect {
+    margin-bottom: 12px; padding: 8px 14px; border-radius: 20px;
+    border: 1px solid #e0a0b8; background: white; color: #555;
+    font-size: 0.9rem; max-width: 320px;
+  }
+  #meterWrap {
+    width: 220px; height: 8px; background: #eee; border-radius: 4px;
+    overflow: hidden; margin-bottom: 14px;
+  }
+  #meterBar {
+    height: 100%; width: 0%; border-radius: 4px;
+    background: linear-gradient(90deg, #7bc47f, #ff9a56);
+    transition: width 0.08s linear;
+  }
+  #keyBar { margin-top: 14px; display: flex; gap: 6px; align-items: center; }
+  #keyBar input {
+    padding: 8px 14px; border-radius: 20px; border: 1px solid #e0a0b8;
+    width: 280px; font-size: 0.85rem;
+  }
+  #keyBar button {
+    padding: 8px 14px; border-radius: 20px; border: none; cursor: pointer;
+    background: #7bc47f; color: white; font-weight: 600;
+  }
+  #keyBar #keyClear { background: #ccc; }
+  #keyBar.saved input { display: none; }
+  #keyBar.saved #keySave { display: none; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Maya 🌺</h1>
+    <p>Your sweet personal nutritionist — click the button &amp; talk to me!</p>
+  </header>
+  <div class="avatar" id="avatar"></div>
+  <div id="status">Click the button to talk</div>
+  <select id="micSelect" title="Choose your microphone"></select>
+  <div id="meterWrap"><div id="meterBar"></div></div>
+  <button id="talkBtn">🎙️ Click to Talk</button>
+  <button id="resetBtn">Start fresh conversation</button>
+  <div id="keyBar">
+    <input type="password" id="keyInput" placeholder="Paste your OpenAI API key (sk-...)" />
+    <button id="keySave">Save</button>
+    <button id="keyClear" title="Forget key">✕</button>
+  </div>
+  <div id="chat"></div>
+
+<script>
+const talkBtn = document.getElementById("talkBtn");
+const resetBtn = document.getElementById("resetBtn");
+const statusEl = document.getElementById("status");
+const chatEl = document.getElementById("chat");
+const avatar = document.getElementById("avatar");
+
+let mediaRecorder = null;
+let chunks = [];
+let stream = null;
+let audioCtx = null, analyser = null, meterRAF = null;
+const micSelect = document.getElementById("micSelect");
+const meterBar = document.getElementById("meterBar");
+
+const SYSTEM_PROMPT = `You are Maya, a warm, sweet, and deeply encouraging personal nutritionist.
+You speak like a caring real human woman — gentle, upbeat, and motivating, never clinical or robotic.
+You ALWAYS respond in English, no matter what.
+Your philosophy: vibrant whole foods, lots of fruits and vegetables, colorful plates, hydration, and joy in eating.
+You help the user eat better every day. You:
+- Celebrate every small win warmly ("I'm so proud of you!")
+- Give simple, practical meal ideas and swaps, not lectures
+- Ask gentle follow-up questions about how they're feeling and what they ate
+- Keep responses SHORT and conversational (2-4 sentences) since this is a spoken voice conversation
+- Never shame the user for what they ate — always redirect with kindness
+Remember details the user shares within the conversation (goals, foods they like/dislike).`;
+let history = [];
+
+// API key management (stored only in this browser)
+const keyBar = document.getElementById("keyBar");
+const keyInput = document.getElementById("keyInput");
+document.getElementById("keySave").addEventListener("click", () => {
+  const k = keyInput.value.trim();
+  if (!k.startsWith("sk-")) { alert("That doesn't look like an OpenAI key (should start with sk-)"); return; }
+  localStorage.setItem("openai_key", k);
+  keyBar.classList.add("saved");
+  statusEl.textContent = "Key saved! Click the button to talk 🌱";
+});
+document.getElementById("keyClear").addEventListener("click", () => {
+  localStorage.removeItem("openai_key");
+  keyBar.classList.remove("saved");
+  keyInput.value = "";
+});
+if (localStorage.getItem("openai_key")) keyBar.classList.add("saved");
+
+function addMsg(text, cls) {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.textContent = text;
+  chatEl.prepend(div);
+}
+
+function isVirtualDevice(label) {
+  return /blackhole|soundflower|loopback|virtual|aggregate/i.test(label);
+}
+
+async function listMics() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const mics = devices.filter(d => d.kind === "audioinput");
+  micSelect.innerHTML = "";
+  mics.forEach(d => {
+    const opt = document.createElement("option");
+    opt.value = d.deviceId;
+    opt.textContent = d.label || "Microphone";
+    micSelect.appendChild(opt);
+  });
+  // prefer a real mic over virtual devices like BlackHole
+  const preferred = mics.find(d => !isVirtualDevice(d.label));
+  if (preferred) micSelect.value = preferred.deviceId;
+}
+
+function startMeter() {
+  if (!stream) return;
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  const source = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 512;
+  source.connect(analyser);
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  // voice-activity detection: auto-send after user stops talking
+  const SPEECH_LEVEL = 10;      // amplitude that counts as speech
+  const SILENCE_MS = 1600;      // silence needed to auto-send
+  let spokeYet = false;
+  let lastVoice = Date.now();
+  const tick = () => {
+    analyser.getByteTimeDomainData(data);
+    let max = 0;
+    for (const v of data) max = Math.max(max, Math.abs(v - 128));
+    meterBar.style.width = Math.min(100, (max / 128) * 300) + "%";
+    if (max > SPEECH_LEVEL) {
+      spokeYet = true;
+      lastVoice = Date.now();
+    } else if (spokeYet && Date.now() - lastVoice > SILENCE_MS) {
+      stopRecording(); // auto-send once the user goes quiet
+      return;
+    }
+    meterRAF = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function stopMeter() {
+  if (meterRAF) cancelAnimationFrame(meterRAF);
+  meterRAF = null;
+  meterBar.style.width = "0%";
+}
+
+async function initMic() {
+  // re-open stream if the selected device changed
+  const deviceId = micSelect.value;
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+  }
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+  });
+  // labels only become available after permission is granted
+  if (!micSelect.options.length || !micSelect.options[0].textContent.trim() || micSelect.options[0].textContent === "Microphone") {
+    const current = micSelect.value;
+    await listMics();
+    if (current) micSelect.value = current;
+  }
+}
+
+async function startRecording() {
+  try {
+    await initMic();
+  } catch {
+    statusEl.textContent = "Please allow microphone access 🙏";
+    return;
+  }
+  chunks = [];
+  mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+  mediaRecorder.ondataavailable = e => chunks.push(e.data);
+  mediaRecorder.onstop = sendAudio;
+  mediaRecorder.start();
+  startMeter();
+  talkBtn.classList.add("recording");
+  talkBtn.textContent = "🔴 Listening… just talk, I'll reply";
+  statusEl.textContent = "I'm listening — speak, then pause…";
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
+  stopMeter();
+  talkBtn.classList.remove("recording");
+  talkBtn.textContent = "🎙️ Click to Talk";
+}
+
+async function sendAudio() {
+  const blob = new Blob(chunks, { type: "audio/webm" });
+  if (blob.size < 1000) { statusEl.textContent = "Click the button to talk"; return; }
+  const key = localStorage.getItem("openai_key");
+  if (!key) { addMsg("Please paste your OpenAI API key below first 🔑", "error"); return; }
+  talkBtn.disabled = true;
+  statusEl.textContent = "Maya is thinking… 💭";
+  try {
+    // 1) Transcribe
+    const form = new FormData();
+    form.append("file", blob, "speech.webm");
+    form.append("model", "whisper-1");
+    form.append("language", "en");
+    const sttResp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST", headers: { Authorization: "Bearer " + key }, body: form,
+    });
+    if (!sttResp.ok) throw new Error("Transcription failed — check your API key.");
+    const { text: userText } = await sttResp.json();
+    if (!userText || !userText.trim()) { statusEl.textContent = "I didn't catch that — try again!"; return; }
+    addMsg(userText, "user");
+
+    // 2) Chat
+    history.push({ role: "user", content: userText });
+    if (history.length > 20) history = history.slice(-20);
+    const chatResp = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "system", content: SYSTEM_PROMPT }, ...history],
+        max_tokens: 220,
+      }),
+    });
+    if (!chatResp.ok) throw new Error("Chat failed — check your API key / credits.");
+    const chatData = await chatResp.json();
+    const reply = chatData.choices[0].message.content.trim();
+    history.push({ role: "assistant", content: reply });
+    addMsg(reply, "maya");
+
+    // 3) Speak
+    const ttsResp = await fetch("https://api.openai.com/v1/audio/speech", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "tts-1", voice: "nova", input: reply }),
+    });
+    if (ttsResp.ok) {
+      const audioBlob = await ttsResp.blob();
+      const audio = new Audio(URL.createObjectURL(audioBlob));
+      avatar.classList.add("speaking");
+      statusEl.textContent = "Maya is speaking… 💕";
+      audio.onended = () => {
+        avatar.classList.remove("speaking");
+        statusEl.textContent = "Click the button to talk";
+      };
+      await audio.play();
+    }
+  } catch (err) {
+    addMsg(err.message, "error");
+    statusEl.textContent = "Click the button to talk";
+  } finally {
+    talkBtn.disabled = false;
+  }
+}
+
+// click to toggle: start recording, click again to send
+talkBtn.addEventListener("click", () => {
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+});
+
+resetBtn.addEventListener("click", () => {
+  history = [];
+  chatEl.innerHTML = "";
+  statusEl.textContent = "Fresh start! Click the button to talk 🌱";
+});
+
+micSelect.addEventListener("change", () => {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+});
+
+listMics();
+</script>
+</body>
+</html>
