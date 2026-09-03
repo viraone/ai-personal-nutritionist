@@ -7,6 +7,20 @@ Talk to Maya, a warm and encouraging AI nutritionist, using your voice.
 Open the site, paste your own Gemini API key (free at https://aistudio.google.com/apikey — stored only in your browser), click 🎙️ and talk.
 Maya listens, auto-detects when you stop speaking, and replies out loud in a sweet natural voice.
 
+## No-key mode (Cloudflare Worker proxy)
+
+Deploy `worker/` so visitors never paste a key — it stays secret on Cloudflare:
+
+```bash
+cd worker
+npx wrangler login
+npx wrangler secret put GEMINI_API_KEY   # paste your key when prompted
+npx wrangler deploy                      # prints https://maya-gemini-proxy.<you>.workers.dev
+```
+
+Then set `PROXY_URL` at the top of the `<script>` in `docs/index.html` to that URL and push.
+The Worker only answers requests whose `Origin` is in `ALLOWED_ORIGINS` (`worker/wrangler.toml`).
+
 ## Run locally (key stays in .env)
 
 ```bash

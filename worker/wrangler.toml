@@ -1,0 +1,8 @@
+name = "maya-gemini-proxy"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# Secret (set with: npx wrangler secret put GEMINI_API_KEY)
+# [vars] ALLOWED_ORIGINS is a comma-separated list of allowed page origins
+[vars]
+ALLOWED_ORIGINS = "https://viraone.github.io,http://localhost:3000"

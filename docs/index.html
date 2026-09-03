@@ -157,7 +157,10 @@ Remember details the user shares within the conversation (goals, foods they like
 let history = [];
 
 // Gemini API (key stored only in this browser)
-const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
+// Set PROXY_URL to your Cloudflare Worker URL to skip the API-key box entirely.
+// Leave it empty to require a user-pasted key (calls go straight to Google).
+const PROXY_URL = "";
+const GEMINI_BASE = (PROXY_URL ? PROXY_URL.replace(/\/+$/, "") + "/" : "https://generativelanguage.googleapis.com/v1beta/") + "models/";
 const CHAT_MODEL = "gemini-3.6-flash";
 const KEY_NAME = "gemini_key";
 let ttsModel = null;
@@ -165,7 +168,7 @@ let ttsModel = null;
 // Discover the newest available TTS model for this key (model names change over time)
 async function findTtsModel(key) {
   if (ttsModel) return ttsModel;
-  const resp = await fetch(GEMINI_BASE + "?pageSize=200", { headers: { "x-goog-api-key": key } });
+  const resp = await fetch(GEMINI_BASE + "?pageSize=200", { headers: authHeaders(key) });
   if (!resp.ok) throw new Error("Couldn't list models");
   const { models = [] } = await resp.json();
   const tts = models
@@ -176,10 +179,14 @@ async function findTtsModel(key) {
   return (ttsModel = tts[0]);
 }
 
+function authHeaders(key) {
+  return key ? { "x-goog-api-key": key } : {};
+}
+
 async function gemini(model, body, key) {
   const resp = await fetch(GEMINI_BASE + model + ":generateContent", {
     method: "POST",
-    headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
+    headers: { ...authHeaders(key), "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -219,6 +226,14 @@ document.getElementById("keyClear").addEventListener("click", () => {
   keyInput.value = "";
 });
 if (localStorage.getItem(KEY_NAME)) keyBar.classList.add("saved");
+if (PROXY_URL) keyBar.style.display = "none";
+
+// Returns the user's key, or "" when the proxy supplies it. Null means we can't proceed.
+function getKey() {
+  const k = localStorage.getItem(KEY_NAME) || "";
+  if (!k && !PROXY_URL) { addMsg("Please paste your Gemini API key below first 🔑", "error"); return null; }
+  return k;
+}
 
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
@@ -392,8 +407,8 @@ async function sendAudio() {
   const type = (mediaRecorder && mediaRecorder.mimeType || "audio/webm").split(";")[0];
   const blob = new Blob(chunks, { type });
   if (blob.size < 1000) { statusEl.textContent = "Click the button to talk"; return; }
-  const key = localStorage.getItem(KEY_NAME);
-  if (!key) { addMsg("Please paste your Gemini API key below first 🔑", "error"); return; }
+  const key = getKey();
+  if (key === null) return;
   talkBtn.disabled = true;
   statusEl.textContent = "Maya is thinking… 💭";
   try {
@@ -460,8 +475,8 @@ function amazonLink(item) {
 }
 
 shopBtn.addEventListener("click", async () => {
-  const key = localStorage.getItem(KEY_NAME);
-  if (!key) { addMsg("Please paste your Gemini API key below first 🔑", "error"); return; }
+  const key = getKey();
+  if (key === null) return;
   if (!history.length) { addMsg("Talk to Maya first so she can suggest some foods! 🎙️", "error"); return; }
   shopBtn.disabled = true;
   shopBtn.textContent = "🛒 Building your list…";
