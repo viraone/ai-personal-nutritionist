@@ -186,7 +186,7 @@ const keyBar = document.getElementById("keyBar");
 const keyInput = document.getElementById("keyInput");
 document.getElementById("keySave").addEventListener("click", () => {
   const k = keyInput.value.trim();
-  if (!k.startsWith("AIza")) { alert("That doesn't look like a Gemini key (should start with AIza)"); return; }
+  if (!k) { alert("Please paste your Gemini API key first"); return; }
   localStorage.setItem(KEY_NAME, k);
   keyBar.classList.add("saved");
   statusEl.textContent = "Key saved! Click the button to talk 🌱";
