@@ -192,7 +192,15 @@ async function gemini(model, body, key) {
 
 function geminiText(data) {
   const parts = (data.candidates && data.candidates[0].content.parts) || [];
-  return parts.map(p => p.text || "").join("").trim();
+  return parts.filter(p => !p.thought).map(p => p.text || "").join("").trim();
+}
+
+// Tolerates code fences / stray text around the JSON object
+function parseJson(text) {
+  try { return JSON.parse(text); } catch {}
+  const m = text.match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch {} }
+  throw new Error("Bad JSON from Gemini: " + text.slice(0, 120));
 }
 
 // API key management
@@ -399,10 +407,9 @@ async function sendAudio() {
     const data = await gemini(CHAT_MODEL, {
       systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents,
-      generationConfig: { responseMimeType: "application/json", maxOutputTokens: 400 },
+      generationConfig: { responseMimeType: "application/json" },
     }, key);
-    let parsed;
-    try { parsed = JSON.parse(geminiText(data)); } catch { throw new Error("Maya got a bit muddled — please try again."); }
+    const parsed = parseJson(geminiText(data));
     const userText = (parsed.transcript || "").trim();
     const reply = (parsed.reply || "").trim();
     if (!userText) { statusEl.textContent = "I didn't catch that — try again!"; return; }
@@ -462,10 +469,9 @@ shopBtn.addEventListener("click", async () => {
     const data = await gemini(CHAT_MODEL, {
       systemInstruction: { parts: [{ text: "Extract a grocery shopping list from this nutrition conversation. Return ONLY JSON: {\"items\":[{\"name\":\"grocery item as you'd search it at Whole Foods\",\"why\":\"3-6 word reason\"}]}. Include 4-10 concrete items Maya recommended or that support her advice. No pantry staples the user didn't discuss." }] },
       contents: [{ role: "user", parts: [{ text: history.map(m => m.role + ": " + m.content).join("\n") }] }],
-      generationConfig: { responseMimeType: "application/json", maxOutputTokens: 600 },
+      generationConfig: { responseMimeType: "application/json" },
     }, key);
-    let items = [];
-    try { items = JSON.parse(geminiText(data)).items || []; } catch { throw new Error("Couldn't build the list — please try again."); }
+    const items = parseJson(geminiText(data)).items || [];
     if (!items.length) throw new Error("No food suggestions found yet — chat with Maya a bit more!");
 
     shopList.innerHTML = "";
