@@ -123,7 +123,7 @@
   <button id="shopBtn">🛒 Turn Maya's tips into a Whole Foods pickup list</button>
   <div id="shopList"></div>
   <div id="keyBar">
-    <input type="password" id="keyInput" placeholder="Paste your OpenAI API key (sk-...)" />
+    <input type="password" id="keyInput" placeholder="Paste your Gemini API key (AIza...)" />
     <button id="keySave">Save</button>
     <button id="keyClear" title="Forget key">✕</button>
   </div>
@@ -156,22 +156,108 @@ You help the user eat better every day. You:
 Remember details the user shares within the conversation (goals, foods they like/dislike).`;
 let history = [];
 
-// API key management (stored only in this browser)
+// Gemini API (key stored only in this browser)
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
+const CHAT_MODEL = "gemini-2.5-flash";
+const TTS_MODEL = "gemini-2.5-flash-preview-tts";
+const KEY_NAME = "gemini_key";
+
+async function gemini(model, body, key) {
+  const resp = await fetch(GEMINI_BASE + model + ":generateContent", {
+    method: "POST",
+    headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    let msg = "Gemini request failed (" + resp.status + ")";
+    try { msg = (await resp.json()).error.message || msg; } catch {}
+    throw new Error(msg);
+  }
+  return resp.json();
+}
+
+function geminiText(data) {
+  const parts = (data.candidates && data.candidates[0].content.parts) || [];
+  return parts.map(p => p.text || "").join("").trim();
+}
+
+// API key management
 const keyBar = document.getElementById("keyBar");
 const keyInput = document.getElementById("keyInput");
 document.getElementById("keySave").addEventListener("click", () => {
   const k = keyInput.value.trim();
-  if (!k.startsWith("sk-")) { alert("That doesn't look like an OpenAI key (should start with sk-)"); return; }
-  localStorage.setItem("openai_key", k);
+  if (!k.startsWith("AIza")) { alert("That doesn't look like a Gemini key (should start with AIza)"); return; }
+  localStorage.setItem(KEY_NAME, k);
   keyBar.classList.add("saved");
   statusEl.textContent = "Key saved! Click the button to talk 🌱";
 });
 document.getElementById("keyClear").addEventListener("click", () => {
-  localStorage.removeItem("openai_key");
+  localStorage.removeItem(KEY_NAME);
   keyBar.classList.remove("saved");
   keyInput.value = "";
 });
-if (localStorage.getItem("openai_key")) keyBar.classList.add("saved");
+if (localStorage.getItem(KEY_NAME)) keyBar.classList.add("saved");
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(",")[1]);
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+}
+
+// Wrap raw 16-bit PCM (what Gemini TTS returns) in a WAV header so <audio> can play it
+function pcmToWavBlob(base64, sampleRate) {
+  const pcm = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  const buf = new ArrayBuffer(44 + pcm.length);
+  const v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + pcm.length, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, pcm.length, true);
+  new Uint8Array(buf, 44).set(pcm);
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+function speakFallback(text) {
+  return new Promise(resolve => {
+    if (!window.speechSynthesis) return resolve();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-US"; u.pitch = 1.1; u.rate = 1;
+    const v = speechSynthesis.getVoices().find(v => /samantha|female|zira|google us english/i.test(v.name));
+    if (v) u.voice = v;
+    u.onend = u.onerror = () => resolve();
+    speechSynthesis.speak(u);
+  });
+}
+
+async function speak(text, key) {
+  avatar.classList.add("speaking");
+  statusEl.textContent = "Maya is speaking… 💕";
+  try {
+    const data = await gemini(TTS_MODEL, {
+      contents: [{ parts: [{ text: "Say warmly and gently, like a caring friend: " + text }] }],
+      generationConfig: {
+        responseModalities: ["AUDIO"],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } } },
+      },
+    }, key);
+    const part = data.candidates[0].content.parts.find(p => p.inlineData);
+    const rate = parseInt((/rate=(\d+)/.exec(part.inlineData.mimeType) || [])[1] || "24000", 10);
+    const audio = new Audio(URL.createObjectURL(pcmToWavBlob(part.inlineData.data, rate)));
+    await new Promise((resolve, reject) => {
+      audio.onended = resolve; audio.onerror = reject; audio.play().catch(reject);
+    });
+  } catch {
+    await speakFallback(text);
+  } finally {
+    avatar.classList.remove("speaking");
+    statusEl.textContent = "Click the button to talk";
+  }
+}
 
 function addMsg(text, cls) {
   const div = document.createElement("div");
@@ -262,7 +348,8 @@ async function startRecording() {
     return;
   }
   chunks = [];
-  mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+  const mime = ["audio/webm", "audio/mp4", "audio/ogg"].find(m => MediaRecorder.isTypeSupported(m));
+  mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
   mediaRecorder.ondataavailable = e => chunks.push(e.data);
   mediaRecorder.onstop = sendAudio;
   mediaRecorder.start();
@@ -280,61 +367,39 @@ function stopRecording() {
 }
 
 async function sendAudio() {
-  const blob = new Blob(chunks, { type: "audio/webm" });
+  const type = (mediaRecorder && mediaRecorder.mimeType || "audio/webm").split(";")[0];
+  const blob = new Blob(chunks, { type });
   if (blob.size < 1000) { statusEl.textContent = "Click the button to talk"; return; }
-  const key = localStorage.getItem("openai_key");
-  if (!key) { addMsg("Please paste your OpenAI API key below first 🔑", "error"); return; }
+  const key = localStorage.getItem(KEY_NAME);
+  if (!key) { addMsg("Please paste your Gemini API key below first 🔑", "error"); return; }
   talkBtn.disabled = true;
   statusEl.textContent = "Maya is thinking… 💭";
   try {
-    // 1) Transcribe
-    const form = new FormData();
-    form.append("file", blob, "speech.webm");
-    form.append("model", "whisper-1");
-    form.append("language", "en");
-    const sttResp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST", headers: { Authorization: "Bearer " + key }, body: form,
-    });
-    if (!sttResp.ok) throw new Error("Transcription failed — check your API key.");
-    const { text: userText } = await sttResp.json();
-    if (!userText || !userText.trim()) { statusEl.textContent = "I didn't catch that — try again!"; return; }
+    // 1) Transcribe + reply in one Gemini call (audio sent inline)
+    const audioB64 = await blobToBase64(blob);
+    const contents = history.map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+    contents.push({ role: "user", parts: [
+      { inlineData: { mimeType: blob.type || "audio/webm", data: audioB64 } },
+      { text: "The audio above is what the user just said. Transcribe it in English, then reply as Maya. Return ONLY JSON: {\"transcript\":\"...\",\"reply\":\"...\"}. If the audio has no clear speech, set transcript to an empty string." },
+    ] });
+    const data = await gemini(CHAT_MODEL, {
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents,
+      generationConfig: { responseMimeType: "application/json", maxOutputTokens: 400 },
+    }, key);
+    let parsed;
+    try { parsed = JSON.parse(geminiText(data)); } catch { throw new Error("Maya got a bit muddled — please try again."); }
+    const userText = (parsed.transcript || "").trim();
+    const reply = (parsed.reply || "").trim();
+    if (!userText) { statusEl.textContent = "I didn't catch that — try again!"; return; }
     addMsg(userText, "user");
-
-    // 2) Chat
     history.push({ role: "user", content: userText });
-    if (history.length > 20) history = history.slice(-20);
-    const chatResp = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [{ role: "system", content: SYSTEM_PROMPT }, ...history],
-        max_tokens: 220,
-      }),
-    });
-    if (!chatResp.ok) throw new Error("Chat failed — check your API key / credits.");
-    const chatData = await chatResp.json();
-    const reply = chatData.choices[0].message.content.trim();
     history.push({ role: "assistant", content: reply });
+    if (history.length > 20) history = history.slice(-20);
     addMsg(reply, "maya");
 
-    // 3) Speak
-    const ttsResp = await fetch("https://api.openai.com/v1/audio/speech", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "tts-1", voice: "nova", input: reply }),
-    });
-    if (ttsResp.ok) {
-      const audioBlob = await ttsResp.blob();
-      const audio = new Audio(URL.createObjectURL(audioBlob));
-      avatar.classList.add("speaking");
-      statusEl.textContent = "Maya is speaking… 💕";
-      audio.onended = () => {
-        avatar.classList.remove("speaking");
-        statusEl.textContent = "Click the button to talk";
-      };
-      await audio.play();
-    }
+    // 2) Speak
+    await speak(reply, key);
   } catch (err) {
     addMsg(err.message, "error");
     statusEl.textContent = "Click the button to talk";
@@ -374,28 +439,19 @@ function amazonLink(item) {
 }
 
 shopBtn.addEventListener("click", async () => {
-  const key = localStorage.getItem("openai_key");
-  if (!key) { addMsg("Please paste your OpenAI API key below first 🔑", "error"); return; }
+  const key = localStorage.getItem(KEY_NAME);
+  if (!key) { addMsg("Please paste your Gemini API key below first 🔑", "error"); return; }
   if (!history.length) { addMsg("Talk to Maya first so she can suggest some foods! 🎙️", "error"); return; }
   shopBtn.disabled = true;
   shopBtn.textContent = "🛒 Building your list…";
   try {
-    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + key, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "Extract a grocery shopping list from this nutrition conversation. Return ONLY JSON: {\"items\":[{\"name\":\"grocery item as you'd search it at Whole Foods\",\"why\":\"3-6 word reason\"}]}. Include 4-10 concrete items Maya recommended or that support her advice. No pantry staples the user didn't discuss." },
-          { role: "user", content: history.map(m => m.role + ": " + m.content).join("\n") },
-        ],
-        response_format: { type: "json_object" },
-        max_tokens: 400,
-      }),
-    });
-    if (!resp.ok) throw new Error("Couldn't build the list — check your API key.");
-    const data = await resp.json();
-    const items = JSON.parse(data.choices[0].message.content).items || [];
+    const data = await gemini(CHAT_MODEL, {
+      systemInstruction: { parts: [{ text: "Extract a grocery shopping list from this nutrition conversation. Return ONLY JSON: {\"items\":[{\"name\":\"grocery item as you'd search it at Whole Foods\",\"why\":\"3-6 word reason\"}]}. Include 4-10 concrete items Maya recommended or that support her advice. No pantry staples the user didn't discuss." }] },
+      contents: [{ role: "user", parts: [{ text: history.map(m => m.role + ": " + m.content).join("\n") }] }],
+      generationConfig: { responseMimeType: "application/json", maxOutputTokens: 600 },
+    }, key);
+    let items = [];
+    try { items = JSON.parse(geminiText(data)).items || []; } catch { throw new Error("Couldn't build the list — please try again."); }
     if (!items.length) throw new Error("No food suggestions found yet — chat with Maya a bit more!");
 
     shopList.innerHTML = "";
