@@ -159,7 +159,7 @@ let history = [];
 // Gemini API (key stored only in this browser)
 // Set PROXY_URL to your Cloudflare Worker URL to skip the API-key box entirely.
 // Leave it empty to require a user-pasted key (calls go straight to Google).
-const PROXY_URL = "";
+const PROXY_URL = "https://maya-gemini-proxy.viraone.workers.dev";
 const GEMINI_BASE = (PROXY_URL ? PROXY_URL.replace(/\/+$/, "") + "/" : "https://generativelanguage.googleapis.com/v1beta/") + "models/";
 const CHAT_MODEL = "gemini-3.6-flash";
 const KEY_NAME = "gemini_key";
