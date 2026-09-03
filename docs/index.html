@@ -158,9 +158,23 @@ let history = [];
 
 // Gemini API (key stored only in this browser)
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
-const CHAT_MODEL = "gemini-2.5-flash";
-const TTS_MODEL = "gemini-2.5-flash-preview-tts";
+const CHAT_MODEL = "gemini-3.6-flash";
 const KEY_NAME = "gemini_key";
+let ttsModel = null;
+
+// Discover the newest available TTS model for this key (model names change over time)
+async function findTtsModel(key) {
+  if (ttsModel) return ttsModel;
+  const resp = await fetch(GEMINI_BASE + "?pageSize=200", { headers: { "x-goog-api-key": key } });
+  if (!resp.ok) throw new Error("Couldn't list models");
+  const { models = [] } = await resp.json();
+  const tts = models
+    .filter(m => /tts/i.test(m.name) && (m.supportedGenerationMethods || []).includes("generateContent"))
+    .map(m => m.name.replace(/^models\//, ""))
+    .sort((a, b) => (/flash/.test(b) - /flash/.test(a)) || b.localeCompare(a, undefined, { numeric: true }));
+  if (!tts.length) throw new Error("No TTS model available");
+  return (ttsModel = tts[0]);
+}
 
 async function gemini(model, body, key) {
   const resp = await fetch(GEMINI_BASE + model + ":generateContent", {
@@ -238,7 +252,7 @@ async function speak(text, key) {
   avatar.classList.add("speaking");
   statusEl.textContent = "Maya is speaking… 💕";
   try {
-    const data = await gemini(TTS_MODEL, {
+    const data = await gemini(await findTtsModel(key), {
       contents: [{ parts: [{ text: "Say warmly and gently, like a caring friend: " + text }] }],
       generationConfig: {
         responseModalities: ["AUDIO"],

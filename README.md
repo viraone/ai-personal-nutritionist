@@ -20,7 +20,7 @@ Then open http://localhost:3000.
 ## Features
 
 - 🎙️ One-click voice chat with auto silence detection
-- 🗣️ Live site: Gemini 2.5 Flash hears your audio directly and replies, spoken with Gemini TTS ("Aoede")
+- 🗣️ Live site: Gemini 3.6 Flash hears your audio directly and replies, spoken with Gemini TTS ("Aoede")
 - 🗣️ Local server: Whisper transcription + GPT-4o-mini + natural TTS voice ("nova")
 - 🎛️ Microphone picker with live input level meter
 - 💚 Warm, non-judgmental nutrition coaching persona
